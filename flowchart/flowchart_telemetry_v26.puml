@@ -1,0 +1,155 @@
+@startuml flowchart_telemetry_v26
+title Обработка телеметрии датчиков: алгоритм с дорожками (вариант 26)
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam defaultFontName SansSerif
+|Ядро|
+|Датчик|
+|Приёмщик ДП|
+|Планировщик ДВ|
+|Вычислительный узел|
+|Статистика и вывод|
+|Ядро|
+start
+:Проверить n >= 1, m >= 1, B >= 1,
+0 < a_i < b_i, mu_d > 0;
+:Выбрать режим STEP или AUTO;
+:N := N_step для STEP, иначе 100,
+p_prev := NONE, iteration := 0;
+repeat
+  :iteration := iteration + 1;
+  :initialize(N), t := 0, generated := 0;
+  :Очистить буфер, узлы, календарь, статистику,
+журнал, ptrB := 0, ptrD := 0;
+  |Датчик|
+  :Для каждого датчика i запланировать
+ARRIVAL(i, U[a_i,b_i]) (ИБ, ИЗ2);
+  |Ядро|
+  while (календарь не пуст?) is (да)
+    :ev := pop(), t := ev.time;
+    note right
+    При равном t сначала RELEASE, затем ARRIVAL.
+    Далее номер узла/датчика и порядок события.
+    end note
+    if (ev.kind = ARRIVAL?) then (да)
+      |Датчик|
+      :req := buildRequest(t);
+      |Статистика и вывод|
+      :onGenerated(req), журнал GENERATED;
+      |Ядро|
+      :generated := generated + 1;
+      if (generated < N?) then (да)
+        |Датчик|
+        :Запланировать следующий ARRIVAL(i)
+на t + U[a_i,b_i];
+      else (нет)
+        |Ядро|
+        :removeAll(ARRIVAL);
+      endif
+      |Приёмщик ДП|
+      :Триггер ARRIVAL;
+      :Д10З3: slot := первое свободное место от 0;
+      if (slot найден?) then (да)
+        :place(slot, req, t), без сдвига;
+      else (нет, переполнение)
+        :Д10О4: slot := ячейка с максимумом
+(enqueuedAt, enqueueOrder) среди заявок буфера;
+        :victim := takeOut(slot),
+victim.markRejected(t);
+        |Статистика и вывод|
+        :onRejected(victim), журнал EVICTED;
+        |Приёмщик ДП|
+        :place(slot, req, t);
+      endif
+      :Буфер отмечает req.markQueued(t, ++enqueueCounter);
+      :Журнал BUFFERED;
+      note right
+      ДП не знает о приборах.
+      Вставка и вытеснение не меняют указатели.
+      Новая заявка не участвует в выборе жертвы.
+      end note
+    else (RELEASE)
+      |Вычислительный узел|
+      :served := complete(t),
+пометить SERVED, учесть занятое время,
+освободить узел;
+      |Статистика и вывод|
+      :onServed(served), журнал SERVED;
+    endif
+    |Планировщик ДВ|
+    :Триггер после ARRIVAL или RELEASE;
+    :dispatchDone := false;
+    while (dispatchDone = false?) is (да)
+      if (буфер пуст?) then (да)
+        :dispatchDone := true,
+указатели не меняются;
+      else (нет)
+        :Д2П2: не более m проверок по кольцу от ptrD;
+        if (свободный узел d найден?) then (да)
+          :ptrD := (d + 1) mod m;
+          :Д2Б3: не более B проверок от ptrB,
+пустые ячейки пропускать по кольцу;
+          :k := первая занятая ячейка,
+ptrB := (k + 1) mod B;
+          :req := takeOut(k), без сдвига,
+журнал PICKED_FROM_BUFFER;
+          |Вычислительный узел|
+          :ПЗ1: dt := -ln(U) / mu_d, U из (0,1),
+endAt := beginService(req, t) = t + dt;
+          :req.markServing(t, endAt), узел занят;
+          |Планировщик ДВ|
+          :push(RELEASE(d, endAt)),
+журнал SENT_TO_DEVICE;
+        else (нет, все заняты)
+          :dispatchDone := true,
+ожидать RELEASE, указатели не меняются;
+        endif
+      endif
+    endwhile (нет)
+    |Статистика и вывод|
+    if (режим STEP?) then (да)
+      :ОД2: формализованная схема модели
+датчики -> буфер -> узлы -> выход,
+текущие заявки, занятость, ptrB и ptrD;
+      :По памятке: календарь таблицей,
+доля отказов, статистика и журнал;
+      :Ожидать команду следующего шага;
+    else (нет)
+    endif
+    |Ядро|
+  endwhile (нет)
+  :T := t, проверить N = served + rejected;
+  if (режим STEP?) then (да)
+    :done := true;
+  else (AUTO)
+    :p := rejected / N;
+    if (0 < p < 1?) then (да)
+      :N_req := ceil(1.643^2 * (1-p) / (0.1^2 * p));
+      if (p_prev задано и abs(p-p_prev) < 0.1*p_prev
+и N >= N_req?) then (да)
+        :done := true, converged := true;
+      else (нет)
+        :p_prev := p,
+N := max(N+1, N_req), done := false;
+      endif
+    else (p = 0 или p = 1)
+      :p_prev := NONE,
+N := 2*N, done := false;
+    endif
+    if (done = false и достигнут лимит
+итераций или следующего N?) then (да)
+      :done := true, converged := false;
+      |Статистика и вывод|
+      :Сообщить, что точность не подтверждена;
+      |Ядро|
+    else (нет)
+    endif
+  endif
+repeat while (done = false?) is (да) not (нет)
+|Статистика и вывод|
+:ОР1: таблица по источникам и по узлам;
+:Pотк = rejected/generated,
+средние и дисперсии по обслуженным,
+Kисп_d = busyTotal_d / T;
+stop
+@enduml

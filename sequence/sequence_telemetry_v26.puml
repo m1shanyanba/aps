@@ -1,0 +1,179 @@
+@startuml sequence_telemetry_v26
+title Обработка телеметрии датчиков: сквозной сиквенс (вариант 26)
+autonumber
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam defaultFontName SansSerif
+participant "Ядро\nSimulation" as Core
+participant "Календарь\nEventCalendar" as Cal
+participant "Датчик\nSensorSource" as Src
+participant "Приёмщик\nPlacementDispatcher" as DP
+participant "Первое свободное\nFirstFreeSlotPolicy" as AP
+participant "Отказ последней\nLatestQueuedRejection" as RP
+database "Буфер\nSlotBuffer" as Buf
+participant "Планировщик\nSelectionDispatcher" as DV
+participant "Кольцо приборов\nRingDevicePolicy" as DevP
+participant "Кольцо буфера\nRingRequestPolicy" as SP
+participant "Узел\nComputeNode" as Dev
+participant "Статистика\nStatsCollector" as St
+participant "Журнал\nEventJournal" as J
+participant "Пошаговый вывод\nStepRenderer (ОД2)" as View
+note over Core, J
+Код: ИБ ИЗ2 ПЗ1 Д10З3 Д10О4 Д2П2 Д2Б3 ОР1 ОД2.
+ИБ: датчик генерирует независимо от прежних сообщений. ИЗ2: dt ~ U[a,b], 0 < a < b.
+ПЗ1: время обработки ~ Exp(mu), mu > 0. Каждый узел обслуживает одну заявку.
+ДП вызывается на ARRIVAL; ДВ вызывается после ARRIVAL и RELEASE.
+ДП работает только с буфером. Каждая заявка сначала проходит через буфер, даже в HappyFlow.
+Индексы от 0; B >= 1, m >= 1; оба указателя изначально 0, независимы.
+Одинаковое время: RELEASE раньше ARRIVAL, затем номер узла/датчика и порядок события.
+Вызовы req.mark... являются методами TelemetryRequest; отдельная линия заявки опущена.
+end note
+note over Core, J
+Сквозной сценарий: буфер полон и все узлы заняты -> ARRIVAL -> вытеснение из буфера (шаг 1).
+ДВ не находит свободный узел, заявки ждут -> RELEASE (шаг 2) -> одна заявка на узел (шаг 3).
+HappyFlow: свободное место и свободный узел -> постановка в буфер -> немедленное обслуживание.
+Другие края: буфер пуст; буфер непуст, но все узлы заняты; переход каждого указателя через конец.
+Новая заявка по Д10О4 не отклоняется; выбивается только уже ожидающая заявка.
+end note
+== Начало реализации ==
+Core -> Core : initialize(N): очистить состояние и статистику\nсбросить оба указателя
+loop для каждого датчика i
+  Core -> Src : nextInterval()
+  Src --> Core : dt ~ U[a,b] (ИЗ2)
+  Core -> Cal : push(ARRIVAL(i, dt))
+end
+== Событийный цикл ==
+loop пока календарь не пуст
+  Core -> Cal : pop()
+  Cal --> Core : ev = ARRIVAL(i,t) или RELEASE(d,t)
+  Core -> Core : now := ev.time
+  alt ARRIVAL: новая телеметрия
+    Core -> Src : buildRequest(t)
+    Src --> Core : req: TelemetryRequest (i, seqNo, t, type, value)
+    Core -> St : onGenerated(req)
+    Core -> J : log(GENERATED, req, t)
+    Core -> Core : generated := generated + 1
+    alt generated < N
+      Core -> Src : nextInterval()
+      Src --> Core : dt ~ U[a,b]
+      Core -> Cal : push(ARRIVAL(i, t + dt))
+    else generated = N
+      Core -> Cal : removeAll(ARRIVAL)
+    end
+    Core -> DP : placeRequest(req, t)
+    DP -> AP : findSlot(buffer)
+    AP -> Buf : firstEmptySlot()
+    Buf --> AP : slot или NONE
+    AP --> DP : slot или NONE
+    alt slot найден: постановка в буфер (Д10З3)
+      note right of AP
+      Первое свободное место от начала массива.
+      Нет сдвига. Указатель Д2Б3 не меняется.
+      end note
+      DP -> Buf : place(slot, req, t)
+      Buf -> Buf : req.markQueued(t, ++enqueueCounter)
+      DP -> J : log(BUFFERED, req, t)
+    else буфер полон: вытеснение (Д10О4), шаг 1
+      note right of RP
+      Выбирается максимум (enqueuedAt, enqueueOrder)
+      только среди уже находящихся в буфере заявок.
+      enqueueOrder разрешает совпадение времени поступления.
+      Это не последняя ячейка массива и не новая заявка.
+      В стабильном состоянии полный буфер означает занятые узлы.
+      end note
+      DP -> RP : chooseVictimSlot(buffer)
+      RP -> Buf : snapshot()
+      Buf --> RP : снимок занятых ячеек и заявок
+      RP -> RP : slot := индекс последней поступившей
+      RP --> DP : slot
+      DP -> Buf : takeOut(slot)
+      Buf --> DP : victim
+      DP -> DP : victim.markRejected(t)
+      DP -> St : onRejected(victim)
+      DP -> J : log(EVICTED, victim, t)
+      DP -> Buf : place(slot, req, t)
+      Buf -> Buf : req.markQueued(t, ++enqueueCounter)
+      DP -> J : log(BUFFERED, req, t)
+      note over DP, Buf
+      Вытеснение и вставка атомарны относительно обработки событий.
+      Указатели не меняются, сообщения на узлах не затрагиваются.
+      end note
+    end
+  else RELEASE: освобождение узла, шаг 2
+    Core -> Dev : complete(t)
+    Dev -> Dev : served.markServed(), current := NONE\nучесть занятое время
+    Dev --> Core : served: TelemetryRequest
+    Core -> St : onServed(served)
+    Core -> J : log(SERVED, served, t)
+  end
+  Core -> DV : dispatch(t)
+  loop до первого break, пока можно передавать заявки
+    DV -> Buf : occupiedCount()
+    Buf --> DV : k
+    break k = 0: пустой буфер
+      DV -> DV : завершить dispatch, указатели неизменны
+    end
+    DV -> DevP : pickDevice(servers)
+    loop не более m узлов от ptrD по кольцу, до первого свободного
+      DevP -> Dev : isIdle()
+      Dev --> DevP : true или false
+    end
+    alt свободный узел d найден (Д2П2)
+      DevP -> DevP : ptrD := (d + 1) mod m
+      DevP --> DV : d
+    else все узлы заняты, в том числе после шага 1
+      DevP --> DV : NONE (указатель неизменен)
+    end
+    break d = NONE: ожидание RELEASE
+      DV -> DV : завершить dispatch, буфер не меняется
+    end
+    note right of DevP
+    Д2П2: первый свободный узел от ptrD.
+    Занятые пропускаются, после m-1 идёт 0.
+    pickDevice вызывается только при непустом буфере.
+    end note
+    DV -> SP : nextSlot(buffer)
+    loop не более B ячеек от ptrB по кольцу, до первой занятой
+      SP -> Buf : requestAt(k)
+      Buf --> SP : req или NONE
+    end
+    SP -> SP : ptrB := (k + 1) mod B
+    SP --> DV : k (занятая ячейка гарантирована)
+    note right of SP
+    Д2Б3: первая занятая ячейка от ptrB.
+    Пустые пропускаются, после B-1 идёт 0.
+    Пакеты и приоритеты источников не используются.
+    end note
+    group Выборка из буфера и постановка на узел, шаг 3
+      DV -> Buf : takeOut(k)
+      Buf --> DV : req
+      DV -> J : log(PICKED_FROM_BUFFER, req, t)
+      DV -> Dev : beginService(req, t)
+      Dev -> Dev : dt := -ln(U) / mu, U из (0,1)\nendAt := t + dt; req.markServing(t, endAt)
+      Dev --> DV : endAt
+      DV -> Cal : push(RELEASE(d, endAt))
+      DV -> J : log(SENT_TO_DEVICE, req, t)
+    end
+  end
+  opt пошаговый режим (ОД2 и требования памятки)
+    Core -> View : render(t)
+    View -> View : renderFormalScheme(t): датчики -> буфер -> узлы -> выход\nзанятость, идентификаторы сообщений, ptrB, ptrD
+    View -> View : renderCalendar(t): таблица ближайших событий
+    View -> View : renderStatistics(t): доля отказов, статистика и журнал
+    note right of View
+    Состояние читается через ссылки на источники,
+    буфер, узлы, политики, календарь и статистику.
+    Схема показывает состояние после события и dispatch.
+    end note
+  end
+end
+Core -> St : buildTable(servers, totalTime)
+St --> Core : ResultTable (ОР1)
+note over Core, J
+После N-й генерации обслуживание продолжается до опустошения буфера и освобождения всех узлов.
+Состояния: CREATED -> QUEUED -> SERVING -> SERVED; QUEUED -> REJECTED при вытеснении.
+Контроль: generated = served + rejected + в буфере + на узлах.
+В конце generated = N = served + rejected. Отказ учитывается у датчика вытесненной заявки.
+Точность в автоматическом режиме проверяет PrecisionController, см. flowchart и README.
+end note
+@enduml

@@ -1,0 +1,453 @@
+@startuml class_telemetry_v26
+title Диаграмма классов: обработка телеметрии датчиков (вариант 26)
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam defaultFontName SansSerif
+
+package "Данные" {
+  class SimulationConfig {
+    - sourceCount: int
+    - deviceCount: int
+    - bufferCapacity: int
+    - sourceA: double[]
+    - sourceB: double[]
+    - deviceMu: double[]
+    - totalRequests: int
+    --
+    + getSourceCount(): int
+    + getDeviceCount(): int
+    + getBufferCapacity(): int
+    + getA(sourceId: int): double
+    + getB(sourceId: int): double
+    + getMu(deviceId: int): double
+    + getTotalRequests(): int
+  }
+
+  class TelemetryRequest {
+    - sourceId: int
+    - seqNo: int
+    - parameterType: String
+    - value: double
+    - enqueueOrder: long
+    - rejectedAt: double
+    - createdAt: double
+    - enqueuedAt: double
+    - serviceStartAt: double
+    - serviceEndAt: double
+    - state: RequestState
+    --
+    + label(): String
+    + getSourceId(): int
+    + getSeqNo(): int
+    + getCreatedAt(): double
+    + getState(): RequestState
+    + getEnqueuedAt(): double
+    + getEnqueueOrder(): long
+    + markQueued(t: double, order: long): void
+    + markRejected(t: double): void
+    + markServing(t: double, endAt: double): void
+    + markServed(): void
+    + waitTime(): double
+    + serviceTime(): double
+    + sojournTime(): double
+  }
+
+  enum RequestState {
+    CREATED
+    QUEUED
+    SERVING
+    SERVED
+    REJECTED
+  }
+}
+
+package "Элементы СМО" {
+  class SensorSource {
+    - id: int
+    - a: double
+    - b: double
+    - generated: int
+    --
+    + snapshot(): String
+    + nextInterval(): double
+    + buildRequest(now: double): TelemetryRequest
+  }
+
+  class SlotBuffer {
+    - slots: TelemetryRequest[]
+    - enqueueCounter: long
+    --
+    + capacity(): int
+    + occupiedCount(): int
+    + firstEmptySlot(): int
+    .. place вызывает markQueued(t, ++enqueueCounter) ..
+    + place(slot: int, req: TelemetryRequest, now: double): void
+    + takeOut(slot: int): TelemetryRequest
+    + slotOf(req: TelemetryRequest): int
+    + requestAt(slot: int): TelemetryRequest?
+    .. снимок длины B сохраняет индексы и пустые ячейки ..
+    + snapshot(): TelemetryRequest[]
+  }
+
+  class ComputeNode {
+    - id: int
+    - mu: double
+    - current: TelemetryRequest
+    - busyTotal: double
+    --
+    + snapshot(): String
+    + isIdle(): boolean
+    + beginService(req: TelemetryRequest, now: double): double
+    + complete(now: double): TelemetryRequest
+    + getBusyTotal(now: double): double
+  }
+}
+
+package "Диспетчеры и дисциплины" {
+  class PlacementDispatcher <<ДП>> {
+    - buffer: SlotBuffer
+    - admission: AdmissionPolicy
+    - rejection: RejectionPolicy
+    - stats: StatsCollector
+    - journal: EventJournal
+    --
+    + placeRequest(req: TelemetryRequest, now: double): void
+  }
+
+  class SelectionDispatcher <<ДВ>> {
+    - buffer: SlotBuffer
+    - servers: ComputeNode[]
+    - calendar: EventCalendar
+    - requestPolicy: RequestSelectionPolicy
+    - devicePolicy: DevicePolicy
+    - journal: EventJournal
+    --
+    + dispatch(now: double): void
+  }
+
+  interface AdmissionPolicy <<Д10З>> {
+    + findSlot(buffer: SlotBuffer): int
+  }
+  class FirstFreeSlotPolicy <<Д10З3>> {
+    .. Д10З3 ..
+    первое свободное место от начала
+    сдвига очереди нет
+  }
+
+  interface RejectionPolicy <<Д10О>> {
+    + chooseVictimSlot(buffer: SlotBuffer): int
+  }
+  class LatestQueuedRejection <<Д10О4>> {
+    + chooseVictimSlot(buffer: SlotBuffer): int
+    .. Д10О4 ..
+    максимум (enqueuedAt, enqueueOrder) среди заявок буфера
+    новая заявка ещё не участвует в выборе жертвы
+    возвращается индекс ячейки, приборы не затрагиваются
+  }
+
+  interface RequestSelectionPolicy <<Д2Б>> {
+    + nextSlot(buffer: SlotBuffer): int
+    + pointer(): int
+    + reset(): void
+  }
+  class RingRequestPolicy <<Д2Б3>> {
+    - ptr: int = 0
+    + nextSlot(buffer: SlotBuffer): int
+    + pointer(): int
+    + reset(): void
+    .. Д2Б3 ..
+    поиск занятой ячейки от ptr по кольцу, не более B проверок
+    пустой буфер: NONE, указатель не меняется
+    после выбора k: ptr := (k + 1) mod B
+    заявку удаляет ДВ через buffer.takeOut(k)
+  }
+
+  interface DevicePolicy <<Д2П>> {
+    + hasIdle(servers: ComputeNode[]): boolean
+    + pickDevice(servers: ComputeNode[]): int
+    + pointer(): int
+    + reset(): void
+  }
+  class RingDevicePolicy <<Д2П2>> {
+    - ptr: int
+    .. Д2П2 ..
+    поиск свободного прибора по кольцу от ptr
+    после выбора i: ptr := (i + 1) mod m
+    отдельный указатель прибора, не связан с указателем буфера
+  }
+}
+
+package "Ядро моделирования" {
+  class Simulation {
+    - config: SimulationConfig
+    - sources: SensorSource[]
+    - buffer: SlotBuffer
+    - servers: ComputeNode[]
+    - calendar: EventCalendar
+    - placement: PlacementDispatcher
+    - selection: SelectionDispatcher
+    - stats: StatsCollector
+    - journal: EventJournal
+    - now: double
+    - generated: int
+    --
+    + initialize(n: int): void
+    + snapshot(): ModelSnapshot
+    + step(): boolean
+    + runRealization(n: int): void
+    + reset(): void
+    + currentTime(): double
+    + totalTime(): double
+    + rejectProbability(): double
+    + buildTable(): ResultTable
+  }
+
+  class EventCalendar {
+    - queue: PriorityQueue<TimedEvent>
+    --
+    + push(ev: TimedEvent): void
+    + pop(): TimedEvent
+    + isEmpty(): boolean
+    + removeAll(kind: EventKind): void
+    .. порядок: (time, RELEASE перед ARRIVAL, entityId, order) ..
+    + snapshot(): TimedEvent[]
+  }
+
+  class TimedEvent {
+    - order: long
+    - time: double
+    - kind: EventKind
+    - sourceId: int
+    - serverId: int
+    --
+    + getTime(): double
+    + getKind(): EventKind
+    + getSourceId(): int
+    + getOrder(): long
+    + getServerId(): int
+  }
+
+  enum EventKind {
+    ARRIVAL
+    RELEASE
+  }
+
+  class ModelApp {
+    - simulation: Simulation
+    - precision: PrecisionController
+    - stepRenderer: StepRenderer
+    - resultPrinter: ResultPrinter
+    .. пошаговый режим: step(), затем render(currentTime()) ..
+    .. авто режим: findN(), затем print(buildTable()) ..
+    --
+    + runStepMode(): void
+    + runAutoMode(): void
+  }
+
+  class PrecisionController {
+    - simulation: Simulation
+    - config: SimulationConfig
+    - t: double = 1.643
+    - delta: double = 0.1
+    - n0: int = 100
+    - maxIterations: int
+    - maxRequests: long
+    --
+    + requiredN(p: double): int
+    + findN(): PrecisionResult
+  }
+}
+
+package "Статистика и отображение" {
+  class StatsCollector {
+    - perSource: SourceStat[]
+    .. ОР1 ..
+    таблица 1 по источникам, таблица 2 по приборам
+    Kисп = busyTotal / totalTime
+    --
+    + onGenerated(r: TelemetryRequest): void
+    + onRejected(r: TelemetryRequest): void
+    + onServed(r: TelemetryRequest): void
+    .. времена и дисперсии считаются по обслуженным ..
+    + totalRejectProbability(): double
+    + buildTable(servers: ComputeNode[], totalTime: double): ResultTable
+  }
+
+  class SourceStat {
+    - sourceId: int
+    - generated: int
+    - served: int
+    - rejected: int
+    - sumWait: double
+    - sumWait2: double
+    - sumService: double
+    - sumService2: double
+    - sumSojourn: double
+    --
+    + pReject(): double
+    + meanWait(): double
+    + meanService(): double
+    + meanSojourn(): double
+    + varWait(): double
+    + varService(): double
+  }
+
+  class ResultTable {
+    - sourceRows: SourceStat[]
+    - deviceUtilization: double[]
+    --
+    + getSourceRows(): SourceStat[]
+    + getDeviceUtilization(): double[]
+  }
+
+  class EventJournal {
+    - entries: JournalEntry[]
+    --
+    + log(kind: JournalKind, req: TelemetryRequest, t: double): void
+    + entries(): JournalEntry[]
+  }
+
+  class JournalEntry {
+    - time: double
+    - kind: JournalKind
+    - request: TelemetryRequest
+  }
+
+  enum JournalKind {
+    GENERATED
+    BUFFERED
+    EVICTED
+    PICKED_FROM_BUFFER
+    SENT_TO_DEVICE
+    SERVED
+  }
+
+  class StepRenderer <<ОД2>> {
+    - sources: SensorSource[]
+    - calendar: EventCalendar
+    - buffer: SlotBuffer
+    - servers: ComputeNode[]
+    - requestPolicy: RequestSelectionPolicy
+    - devicePolicy: DevicePolicy
+    - journal: EventJournal
+    - stats: StatsCollector
+    --
+    + render(now: double): void
+    + renderFormalScheme(now: double): void
+    + renderCalendar(now: double): void
+    + renderStatistics(now: double): void
+    .. ОД2: схема источники -> буфер -> узлы -> выход ..
+    .. состояние ячеек, заявок, узлов, ptrB и ptrD ..
+  }
+
+  class ModelSnapshot {
+    + getNow(): double
+    + getSourceStates(): String[]
+    + getCalendar(): TimedEvent[]
+    + getBufferSlots(): TelemetryRequest[]
+    + getNodeStates(): String[]
+    + getBufferPointer(): int
+    + getDevicePointer(): int
+    + getRejectProbability(): double
+    --
+    - now: double
+    - sourceStates: String[]
+    - calendar: TimedEvent[]
+    - bufferSlots: TelemetryRequest[]
+    - nodeStates: String[]
+    - bufferPointer: int
+    - devicePointer: int
+    - rejectProbability: double
+  }
+  class PrecisionResult {
+    - sampleSize: int
+    - converged: boolean
+    - table: ResultTable
+    --
+    + getSampleSize(): int
+    + isConverged(): boolean
+    + getTable(): ResultTable
+  }
+  class ResultPrinter <<ОР1>> {
+    + print(table: ResultTable): void
+  }
+}
+
+TelemetryRequest --> RequestState
+SensorSource ..> TelemetryRequest : создаёт
+SlotBuffer o-- "0..*" TelemetryRequest
+ComputeNode --> "0..1" TelemetryRequest : обслуживает
+
+Simulation --> SimulationConfig
+Simulation o-- "1..*" SensorSource
+Simulation o-- "1..*" ComputeNode
+Simulation *-- SlotBuffer
+Simulation *-- EventCalendar
+Simulation *-- StatsCollector
+Simulation *-- EventJournal
+Simulation *-- PlacementDispatcher
+Simulation *-- SelectionDispatcher
+
+PlacementDispatcher --> SlotBuffer
+PlacementDispatcher --> AdmissionPolicy
+PlacementDispatcher --> RejectionPolicy
+PlacementDispatcher --> StatsCollector
+PlacementDispatcher --> EventJournal
+
+SelectionDispatcher --> SlotBuffer
+SelectionDispatcher --> ComputeNode
+SelectionDispatcher --> EventCalendar
+SelectionDispatcher --> RequestSelectionPolicy
+SelectionDispatcher --> DevicePolicy
+SelectionDispatcher --> EventJournal
+
+AdmissionPolicy <|.. FirstFreeSlotPolicy
+RejectionPolicy <|.. LatestQueuedRejection
+RequestSelectionPolicy <|.. RingRequestPolicy
+DevicePolicy <|.. RingDevicePolicy
+
+EventCalendar o-- "0..*" TimedEvent
+TimedEvent --> EventKind
+EventJournal o-- "0..*" JournalEntry
+JournalEntry --> JournalKind
+
+StatsCollector *-- "1..*" SourceStat
+StatsCollector ..> ResultTable : формирует
+PrecisionController --> Simulation : запускает реализации
+ModelApp --> Simulation
+ModelApp --> PrecisionController
+ModelApp --> StepRenderer
+ModelApp --> ResultPrinter
+StepRenderer --> SensorSource
+Simulation ..> ModelSnapshot
+PrecisionController ..> PrecisionResult
+PrecisionResult --> ResultTable
+StepRenderer --> EventCalendar
+StepRenderer --> SlotBuffer
+StepRenderer --> ComputeNode
+StepRenderer --> RequestSelectionPolicy
+StepRenderer --> DevicePolicy
+StepRenderer --> EventJournal
+StepRenderer --> StatsCollector
+ResultPrinter ..> ResultTable
+
+note bottom of RequestState
+CREATED, QUEUED, SERVING, SERVED.
+REJECTED только из QUEUED (выбитая).
+Д10О4 не отклоняет вновь пришедшую заявку.
+end note
+
+note top of Simulation
+Триггеры: ARRIVAL запускает ДП (placeRequest), затем ДВ (dispatch).
+RELEASE освобождает прибор и запускает ДВ.
+ДП работает только с буфером и о приборах не знает.
+Статистика: onGenerated при генерации, onRejected при отказе
+(только выбитая), onServed при RELEASE.
+После N-й заявки ожидающие ARRIVAL удаляются из календаря,
+работа заканчивается после выхода последней заявки.
+Атрибуты всех классов закрыты (private), состояние меняется только методами.
+end note
+
+@enduml
