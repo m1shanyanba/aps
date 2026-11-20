@@ -53,5 +53,3 @@ java -Djava.awt.headless=true -jar /path/to/plantuml.jar \
 java -Djava.awt.headless=true -DPLANTUML_LIMIT_SIZE=8192 -jar /path/to/plantuml.jar \
   -charset UTF-8 -failfast2 -tpng docs/artifacts/*.puml
 ```
-
-Указания к варианту сверены с памяткой преподавателя и методическим пособием, включая таблицу вариантов и приложение о дисциплинах и отображении. [Репозиторий варианта №15](https://github.com/mokkenz1/smo-online-game-service) использован как образец структуры документов и диаграмм. [Справка PlantUML по командной строке](https://plantuml.com/command-line).
