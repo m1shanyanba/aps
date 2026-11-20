@@ -1,0 +1,89 @@
+@startuml
+title Вариант №26 · Успешный сценарий\nСвободная ячейка и свободный обработчик
+skinparam defaultFontName Helvetica
+skinparam titleFontSize 22
+skinparam defaultFontSize 15
+skinparam shadowing false
+skinparam backgroundColor #FFFFFF
+skinparam ArrowColor #31526A
+skinparam sequence {
+  ParticipantBackgroundColor #EAF3F8
+  ParticipantBorderColor #58748A
+  LifeLineBorderColor #A2B3BF
+  GroupBorderColor #708798
+}
+skinparam NoteBackgroundColor #FFF7DF
+skinparam NoteBorderColor #C7AA62
+hide footbox
+autonumber
+
+control "Симулятор" as Sim
+queue "Календарь" as Cal
+participant "Игровой клиент\nИсточник s" as Src
+control "Диспетчер\nпостановки" as Place
+participant "Общий буфер\nN ячеек · УБ" as Buf
+control "Диспетчер\nвыбора · УП" as Select
+participant "Прибор p" as Dev
+participant "Статистика" as Stats
+
+== Генерация и постановка ==
+note over Sim,Dev
+  В начале сценария буфер пуст. Есть свободный прибор.
+  Показанная генерация запланирована по ИЗ2.
+  Обслуживание в этом сценарии завершается до следующего поступления.
+end note
+Sim -> Cal : popNext()
+Cal --> Sim : GENERATION(s, now)
+Sim -> Src : generate(now) · ИБ
+Src --> Sim : заявка r
+Sim -> Stats : registerGenerated(r)
+alt Лимит генераций ещё не исчерпан
+  Sim -> Src : sampleInterval() · ИЗ2, равномерный интервал
+  Src --> Sim : τ = a + (b − a) × U, U ∈ [0, 1), 0 < a < b
+  Sim -> Cal : schedule(GENERATION(s, now + τ))
+else Достигнут лимит генераций
+  Sim -> Cal : cancelGenerations()
+end
+Sim -> Place : place(r, now)
+Place -> Buf : findFirstFree() · Д1ОЗ3, просмотр с ячейки 1
+Buf --> Place : первая свободная ячейка j
+Place -> Buf : put(r, j, now) · присвоить номер постановки
+Place --> Sim : постановка успешна, позиция j
+
+== Назначение на обслуживание ==
+Sim -> Select : tryDispatch(now) · триггер «заявка в буфере»
+Select -> Select : findFreeDevice() · Д2П2, кольцо от УП
+Select -> Dev : isFree()
+Dev --> Select : true
+Select --> Select : свободный прибор p
+Select -> Buf : findNextOccupied() · Д2Б3, кольцо от УБ
+Buf --> Select : занятая ячейка j
+Select -> Buf : take(j)
+Buf -> Buf : извлечь r, УБ ← 1 + (j mod N)
+Buf --> Select : r, ячейка освобождена
+Select -> Dev : start(r, now)
+Dev -> Dev : sampleServiceTime() · ПЗ1
+Dev --> Dev : t = −ln(U) / μ, U ∈ (0, 1), μ > 0
+Dev -> Dev : отметить старт, занять прибор
+Dev --> Select : finishAt = now + t
+Select -> Select : УП ← 1 + (p mod M)
+Select -> Stats : registerStart(r, p, now)
+Select -> Cal : schedule(SERVICE_FINISHED(p, r, finishAt))
+Select --> Sim : r принята прибором p
+
+== Завершение и освобождение ==
+... Календарь выдаёт событие завершения ...
+Sim -> Cal : popNext()
+Cal --> Sim : SERVICE_FINISHED(p, r, finishAt)
+Sim -> Dev : finish(finishAt)
+Dev -> Dev : отметить выход r, освободить прибор
+Dev --> Sim : завершённая r
+Sim -> Stats : registerServed(r, p)
+Sim -> Select : tryDispatch(finishAt) · триггер «прибор свободен»
+ref over Select, Dev
+  Д2П2 · поиск по кольцу находит свободный прибор
+end ref
+Select -> Buf : findNextOccupied() · Д2Б3
+Buf --> Select : нет заявки
+Select --> Sim : назначения нет, УБ и УП сохраняются
+@enduml

@@ -1,0 +1,44 @@
+@startuml
+!pragma layout smetana
+title Вариант №26 · Формализованная схема СМО · ОД2
+skinparam defaultFontName Helvetica
+skinparam titleFontSize 22
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam ArrowColor #31526A
+skinparam rectangle {
+  BackgroundColor #EAF3F8
+  BorderColor #58748A
+  RoundCorner 10
+}
+skinparam NoteBackgroundColor #FFF7DF
+skinparam NoteBorderColor #C7AA62
+
+rectangle "Источники И₁ … Иₖ · K клиентов\nИБ · ИЗ2\nСнимок: следующая генерация, счётчики" as Src
+rectangle "Диспетчер постановки\nД1ОЗ3 · поиск с ячейки 1" as Placement
+rectangle "Общий буфер · N ячеек\n1 · 2 · … · N\nСнимок: заявки и номера постановки\nУБ ∈ 1…N · начало выборки" as Buffer
+rectangle "Диспетчер выбора\nД2Б3 · от УБ, Д2П2 · от УП\nСнимок: УП ∈ 1…M" as Selection
+rectangle "Приборы П₁ … Пₘ · M обработчиков\nПЗ1\nСнимок: занятость, заявка, время завершения" as Devices
+rectangle "Выход\nОбработанные действия" as Done #EDF6EC
+rectangle "Выход с отказом\nД1ОО4 · выбитое действие" as Rejected #FBEDEB
+
+Src -down-> Placement : новое действие
+Placement -down-> Buffer : запись в ячейку
+Buffer -down-> Selection : извлечение заявки
+Selection -down-> Devices : назначение
+Devices -down-> Done : результат
+Buffer -right-> Rejected : переполнение
+Devices -[#486F88,dashed]up-> Selection
+
+note right of Placement
+  Состояние шага
+  Модельное время, последнее событие,
+  календарь предстоящих событий,
+  доля отказов и текущие показатели.
+end note
+note right of Devices
+  Сплошные стрелки показывают движение заявки.
+  Пунктир показывает триггер освобождения.
+  Запись заявки в буфер даёт второй триггер.
+end note
+@enduml

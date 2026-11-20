@@ -1,0 +1,134 @@
+@startuml
+title Вариант №26 · Полный сценарий\nЗаполнение буфера, Д1ОО4 и обслуживание после освобождения прибора
+skinparam defaultFontName Helvetica
+skinparam titleFontSize 22
+skinparam defaultFontSize 15
+skinparam shadowing false
+skinparam backgroundColor #FFFFFF
+skinparam ArrowColor #31526A
+skinparam sequence {
+  ParticipantBackgroundColor #EAF3F8
+  ParticipantBorderColor #58748A
+  LifeLineBorderColor #A2B3BF
+  GroupBorderColor #708798
+}
+skinparam NoteBackgroundColor #FFF7DF
+skinparam NoteBorderColor #C7AA62
+hide footbox
+autonumber
+
+control "Симулятор" as Sim
+queue "Календарь" as Cal
+participant "Игровой клиент\nИсточник s" as Src
+control "Диспетчер\nпостановки" as Place
+participant "Общий буфер\nN ячеек · УБ" as Buf
+control "Диспетчер\nвыбора · УП" as Select
+participant "Прибор\nактивный экземпляр" as Dev
+participant "Статистика" as Stats
+
+ref over Sim,Stats
+  Начало перегрузки. Приборы уже заняты предыдущими заявками.
+  Их назначение показано в успешном сценарии до блока завершения.
+end ref
+
+note over Sim,Stats
+  Центральная трасса по итерациям: поступления заполняют N мест при занятых приборах.
+  Следующее поступление выбивает последнюю постановку. Затем прибор завершает
+  обработку, диспетчер назначает ожидающую заявку, а календарь позже выдаёт её завершение.
+end note
+
+loop Пока в календаре есть особые события
+  Sim -> Cal : popNext()
+  Cal --> Sim : событие с наименьшим ключом
+  note over Sim,Cal
+    Перевести часы на время события.
+    При равном времени сначала завершения, затем генерации.
+    Внутри типа порядок по номеру прибора или источника.
+  end note
+  alt Генерация нового запроса
+    Sim -> Src : generate(now) · ИБ
+    Src --> Sim : новая заявка r
+    Sim -> Stats : registerGenerated(r)
+    alt Разрешены следующие генерации
+      Sim -> Src : sampleInterval() · ИЗ2, равномерный интервал
+      Src --> Sim : τ = a + (b − a) × U, U ∈ [0, 1), 0 < a < b
+      Sim -> Cal : schedule(GENERATION(s, now + τ))
+    else Достигнут лимит генераций
+      Sim -> Cal : cancelGenerations()
+    end
+
+    Sim -> Place : place(r, now)
+    Place -> Buf : findFirstFree() · Д1ОЗ3
+    loop С ячейки 1 до первого свободного места или конца
+      Buf -> Buf : проверить ячейку, занятую пропустить
+    end
+    alt Есть свободная ячейка
+      Buf --> Place : первая свободная позиция j
+    else Буфер заполнен
+      Buf --> Place : свободных мест нет
+      Place -> Buf : findNewest() · Д1ОО4
+      Buf --> Place : позиция j с максимальным номером постановки
+      Place -> Buf : evict(j)
+      Buf --> Place : прежняя заявка victim
+      Place -> Stats : registerRefused(victim, now) · отказ её источника
+    end
+    Place -> Buf : put(r, j, now) · следующий номер постановки
+    Place --> Sim : позиция j и вытесненная заявка, если был отказ
+    Sim -> Select : tryDispatch(now) · «заявка в буфере»
+  else Окончание запланированного обслуживания
+    Sim -> Dev : finish(now)
+    Dev -> Dev : отметить выход готовой заявки, освободить прибор
+    Dev --> Sim : завершённая заявка done
+    Sim -> Stats : registerServed(done, p) · выход и занятость
+    Sim -> Select : tryDispatch(now) · «прибор освободился»
+  end
+
+  == Общая попытка выбора по одному триггеру ==
+  Select -> Select : findFreeDevice() · Д2П2, поиск от УП
+  loop От УП, до первого свободного прибора или M проверок
+    Select -> Dev : isFree() у проверяемого прибора
+    Dev --> Select : свободен / занят
+    opt Прибор занят и остались позиции для проверки
+      Select -> Select : пропустить его, при p = M перейти к 1
+    end
+  end
+  alt Все обработчики заняты
+    Select --> Select : свободного прибора нет
+    Select --> Sim : назначения нет, буфер и указатели сохранены
+    note over Sim,Cal
+      Следующая итерация календаря может снова принести заявку
+      или дать завершение. Диспетчер сам себя не опрашивает.
+    end note
+  else Найден свободный прибор p
+    Select --> Select : найденный прибор p
+    Select -> Buf : findNextOccupied() · Д2Б3, поиск от УБ
+    loop От УБ, до первой занятой ячейки или N проверок
+      Buf -> Buf : проверить ячейку, пустую пропустить\nпри j = N продолжить с 1, если есть проверки
+    end
+    alt Буфер пуст
+      Buf --> Select : занятой ячейки нет
+      Select --> Sim : назначения нет, УБ и УП сохранены
+    else Найдена заявка
+      Buf --> Select : занятая ячейка j
+      Select -> Buf : take(j)
+      Buf -> Buf : освободить ячейку, УБ ← 1 + (j mod N)
+      Buf --> Select : заявка r, выбранная по кольцу
+      Select -> Dev : start(r, now) на приборе p
+      Dev -> Dev : sampleServiceTime() · ПЗ1
+      Dev --> Dev : t = −ln(U) / μ, U ∈ (0, 1), μ > 0
+      Dev -> Dev : отметить старт, занять прибор
+      Dev --> Select : finishAt = now + t
+      Select -> Select : УП ← 1 + (p mod M)
+      Select -> Stats : registerStart(r, p, now)
+      Select -> Cal : schedule(SERVICE_FINISHED(p, r, finishAt))
+      Select --> Sim : r принята прибором p
+    end
+  end
+end
+
+note over Sim,Stats
+  Пример из трассы в docs/scenarios.md: при now = 4 заявка F выбивает E.
+  При now = 5 завершается B, заявка D запускается на П2.
+  При now = 8 то же событие завершения для D обновляет статистику и освобождает П2.
+end note
+@enduml
