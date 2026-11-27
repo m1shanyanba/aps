@@ -1,0 +1,49 @@
+@startuml
+title Вариант №26 · Переполнение и выбивание сообщения
+skinparam defaultFontName DejaVu Sans
+skinparam defaultFontSize 13
+skinparam defaultFontColor #142638
+skinparam shadowing false
+skinparam ArrowColor #38566D
+skinparam sequenceLifeLineBorderColor #97ABBA
+skinparam sequenceParticipantBackgroundColor #F1F6FA
+skinparam sequenceParticipantBorderColor #526D82
+skinparam sequenceGroupBorderColor #8095A5
+skinparam sequenceGroupBackgroundColor #EDF3F7
+skinparam noteBackgroundColor #FFF5D9
+skinparam noteBorderColor #B09354
+hide footbox
+
+control "Управление\nмоделью" as Sim
+control "Приёмщик\nтелеметрии" as Place
+participant "Общий\nбуфер" as Buf
+participant "Выбиваемое\nсообщение" as Q
+participant "Статистика" as Stats
+control "Планировщик" as Sel
+
+note over Place, Buf
+  Перед приходом B3 (от И₂) все приборы заняты.
+  Ячейки: [A2#3, A4#6, A3#5], где # — номер постановки.
+  УБ = 3, УП = 2.
+end note
+Sim -> Place : place(B3, 8)
+Place -> Buf : findFirstFree() · Д1ОЗ3
+Buf --> Place : нет свободной ячейки
+Place -> Buf : findNewest() · Д1ОО4, максимум номера постановки
+Buf --> Place : 2, номер постановки 6
+Place -> Buf : peek(2)
+Buf --> Place : A4 от И₁
+Place -> Q : markDropped(8)
+Place -> Stats : recordDrop(A4, 8, 2)
+Stats -> Q : sourceId()
+Q --> Stats : И₁
+Place -> Buf : take(2)
+Buf --> Place : A4
+Place -> Buf : put(2, B3, 8)
+Place -> Stats : recordQueued(B3, 8, 2)
+Sim -> Sel : dispatch(8)
+note over Sel, Buf
+  Все приборы заняты. Состояние буфера [A2#3, B3#7, A3#5].
+  УБ = 3, УП = 2. Отказ записан у И₁.
+end note
+@enduml

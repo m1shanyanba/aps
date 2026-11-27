@@ -1,134 +1,185 @@
 @startuml
-title Вариант №26 · Полный сценарий\nЗаполнение буфера, Д1ОО4 и обслуживание после освобождения прибора
-skinparam defaultFontName Helvetica
-skinparam titleFontSize 22
-skinparam defaultFontSize 15
+title Вариант №26 · Перегрузка и продолжение обслуживания
+skinparam defaultFontName DejaVu Sans
+skinparam defaultFontSize 13
+skinparam defaultFontColor #142638
 skinparam shadowing false
-skinparam backgroundColor #FFFFFF
-skinparam ArrowColor #31526A
-skinparam sequence {
-  ParticipantBackgroundColor #EAF3F8
-  ParticipantBorderColor #58748A
-  LifeLineBorderColor #A2B3BF
-  GroupBorderColor #708798
-}
-skinparam NoteBackgroundColor #FFF7DF
-skinparam NoteBorderColor #C7AA62
+skinparam ArrowColor #38566D
+skinparam sequenceLifeLineBorderColor #97ABBA
+skinparam sequenceParticipantBackgroundColor #F1F6FA
+skinparam sequenceParticipantBorderColor #526D82
+skinparam sequenceGroupBorderColor #8095A5
+skinparam sequenceGroupBackgroundColor #EDF3F7
+skinparam noteBackgroundColor #FFF5D9
+skinparam noteBorderColor #B09354
 hide footbox
-autonumber
 
-control "Симулятор" as Sim
-queue "Календарь" as Cal
-participant "Игровой клиент\nИсточник s" as Src
-control "Диспетчер\nпостановки" as Place
-participant "Общий буфер\nN ячеек · УБ" as Buf
-control "Диспетчер\nвыбора · УП" as Select
-participant "Прибор\nактивный экземпляр" as Dev
+control "Управление\nмоделью" as Sim
+queue "Календарь\nсобытий" as Cal
+participant "Датчик И₁" as A
+participant "Датчик И₂" as B
+control "Приёмщик\nтелеметрии" as Place
+control "Планировщик" as Sel
+participant "Общий\nбуфер" as Buf
+participant "Узел П₁" as P1
+participant "Узел П₂" as P2
+participant "Сообщение\nA4" as Q
 participant "Статистика" as Stats
 
-ref over Sim,Stats
-  Начало перегрузки. Приборы уже заняты предыдущими заявками.
-  Их назначение показано в успешном сценарии до блока завершения.
-end ref
-
-note over Sim,Stats
-  Центральная трасса по итерациям: поступления заполняют N мест при занятых приборах.
-  Следующее поступление выбивает последнюю постановку. Затем прибор завершает
-  обработку, диспетчер назначает ожидающую заявку, а календарь позже выдаёт её завершение.
-end note
-
-loop Пока в календаре есть особые события
-  Sim -> Cal : popNext()
-  Cal --> Sim : событие с наименьшим ключом
-  note over Sim,Cal
-    Перевести часы на время события.
-    При равном времени сначала завершения, затем генерации.
-    Внутри типа порядок по номеру прибора или источника.
-  end note
-  alt Генерация нового запроса
-    Sim -> Src : generate(now) · ИБ
-    Src --> Sim : новая заявка r
-    Sim -> Stats : registerGenerated(r)
-    alt Разрешены следующие генерации
-      Sim -> Src : sampleInterval() · ИЗ2, равномерный интервал
-      Src --> Sim : τ = a + (b − a) × U, U ∈ [0, 1), 0 < a < b
-      Sim -> Cal : schedule(GENERATION(s, now + τ))
-    else Достигнут лимит генераций
-      Sim -> Cal : cancelGenerations()
+== t = 1…5 · занятие обоих узлов и заполнение буфера ==
+    loop Для каждого прихода в t = 1, 2, 3, 4, 5
+      Sim -> Cal : popNext()
+      Cal --> Sim : ближайшая генерация (t, i)
+      alt И₁ на t = 1, 3, 5
+        Sim -> A : generate(t) · ИБ
+        A --> Sim : q = A1, A2 или A3
+        Sim -> A : sampleInterval() · ИЗ2
+        A --> Sim : равномерный интервал τ
+      else И₂ на t = 2, 4
+        Sim -> B : generate(t) · ИБ
+        B --> Sim : q = B1 или B2
+        Sim -> B : sampleInterval() · ИЗ2
+        B --> Sim : равномерный интервал τ
+      end
+      Sim -> Stats : recordGenerated(q, t)
+      Sim -> Cal : scheduleArrival(t + τ, i)
+      Sim -> Place : place(q, t)
+      Place -> Buf : findFirstFree() · Д1ОЗ3, от ячейки 1
+      Buf --> Place : j = 1, 1, 1, 2, 3 по порядку приходов
+      Place -> Buf : put(j, q, t)
+      Place -> Stats : recordQueued(q, t, j)
+      Sim -> Sel : dispatch(t)
+      Sel -> Sel : findFreeDevice() · Д2П2, от УП
+      alt На t = 1 или 2 есть свободный прибор
+        Sel -> Buf : findOccupied(УБ) · Д2Б3, от УБ
+        note right of Buf : На t = 2 пустые ячейки 2 и 3\nпропускаются, обход доходит до 1.
+        Buf --> Sel : j = 1
+        Sel -> Buf : take(1)
+        Buf --> Sel : q
+        alt t = 1, выбран П₁
+          Sel -> P1 : start(A1, 1) · ПЗ1, экспоненциальная длительность
+          P1 --> Sel : завершение в 6
+        else t = 2, выбран П₂
+          Sel -> P2 : start(B1, 2) · ПЗ1
+          P2 --> Sel : завершение в 12
+        end
+        Sel -> Sel : advancePointers(p, 1)
+        Sel -> Cal : scheduleCompletion(at, p)
+        Sel -> Stats : recordStart(q, t, 1, p)
+      else На t = 3…5 оба прибора заняты
+        note over Sel, Buf : Ничего не извлекается. УП = 1, УБ = 2.
+      end
     end
+    note over Buf : После t = 5 буфер [A2#3, B2#4, A3#5].\nЗнак # — номер постановки по всему буферу.
 
-    Sim -> Place : place(r, now)
+    == t = 6…7 · освободилось место и занялось снова ==
+    ref over Sim, Stats : t = 6 · «Завершение обработки и повторный выбор»\nA1 завершено, B2 выбрано из ячейки 2 на П₁ до t = 9.\nБуфер [A2#3, ∅, A3#5], УП = 2, УБ = 3.
+    Sim -> Cal : popNext()
+    Cal --> Sim : ARRIVAL(7, И₁)
+    Sim -> A : generate(7) · ИБ
+    A --> Sim : A4
+    Sim -> Stats : recordGenerated(A4, 7)
+    Sim -> A : sampleInterval() · ИЗ2
+    A --> Sim : 8
+    Sim -> Cal : scheduleArrival(15, 1)
+    Sim -> Place : place(A4, 7)
     Place -> Buf : findFirstFree() · Д1ОЗ3
-    loop С ячейки 1 до первого свободного места или конца
-      Buf -> Buf : проверить ячейку, занятую пропустить
-    end
-    alt Есть свободная ячейка
-      Buf --> Place : первая свободная позиция j
-    else Буфер заполнен
-      Buf --> Place : свободных мест нет
-      Place -> Buf : findNewest() · Д1ОО4
-      Buf --> Place : позиция j с максимальным номером постановки
-      Place -> Buf : evict(j)
-      Buf --> Place : прежняя заявка victim
-      Place -> Stats : registerRefused(victim, now) · отказ её источника
-    end
-    Place -> Buf : put(r, j, now) · следующий номер постановки
-    Place --> Sim : позиция j и вытесненная заявка, если был отказ
-    Sim -> Select : tryDispatch(now) · «заявка в буфере»
-  else Окончание запланированного обслуживания
-    Sim -> Dev : finish(now)
-    Dev -> Dev : отметить выход готовой заявки, освободить прибор
-    Dev --> Sim : завершённая заявка done
-    Sim -> Stats : registerServed(done, p) · выход и занятость
-    Sim -> Select : tryDispatch(now) · «прибор освободился»
-  end
+    Buf --> Place : 2
+    Place -> Buf : put(2, A4, 7)
+    Place -> Stats : recordQueued(A4, 7, 2)
+    Sim -> Sel : dispatch(7)
+    note over Sel, Buf : П₁ и П₂ заняты. Буфер [A2#3, A4#6, A3#5].
 
-  == Общая попытка выбора по одному триггеру ==
-  Select -> Select : findFreeDevice() · Д2П2, поиск от УП
-  loop От УП, до первого свободного прибора или M проверок
-    Select -> Dev : isFree() у проверяемого прибора
-    Dev --> Select : свободен / занят
-    opt Прибор занят и остались позиции для проверки
-      Select -> Select : пропустить его, при p = M перейти к 1
-    end
-  end
-  alt Все обработчики заняты
-    Select --> Select : свободного прибора нет
-    Select --> Sim : назначения нет, буфер и указатели сохранены
-    note over Sim,Cal
-      Следующая итерация календаря может снова принести заявку
-      или дать завершение. Диспетчер сам себя не опрашивает.
-    end note
-  else Найден свободный прибор p
-    Select --> Select : найденный прибор p
-    Select -> Buf : findNextOccupied() · Д2Б3, поиск от УБ
-    loop От УБ, до первой занятой ячейки или N проверок
-      Buf -> Buf : проверить ячейку, пустую пропустить\nпри j = N продолжить с 1, если есть проверки
-    end
-    alt Буфер пуст
-      Buf --> Select : занятой ячейки нет
-      Select --> Sim : назначения нет, УБ и УП сохранены
-    else Найдена заявка
-      Buf --> Select : занятая ячейка j
-      Select -> Buf : take(j)
-      Buf -> Buf : освободить ячейку, УБ ← 1 + (j mod N)
-      Buf --> Select : заявка r, выбранная по кольцу
-      Select -> Dev : start(r, now) на приборе p
-      Dev -> Dev : sampleServiceTime() · ПЗ1
-      Dev --> Dev : t = −ln(U) / μ, U ∈ (0, 1), μ > 0
-      Dev -> Dev : отметить старт, занять прибор
-      Dev --> Select : finishAt = now + t
-      Select -> Select : УП ← 1 + (p mod M)
-      Select -> Stats : registerStart(r, p, now)
-      Select -> Cal : schedule(SERVICE_FINISHED(p, r, finishAt))
-      Select --> Sim : r принята прибором p
-    end
-  end
-end
+    == t = 8 · приход И₂, потеря у И₁ ==
+    Sim -> Cal : popNext()
+    Cal --> Sim : ARRIVAL(8, И₂)
+    Sim -> B : generate(8) · ИБ
+    B --> Sim : B3
+    Sim -> Stats : recordGenerated(B3, 8)
+    Sim -> B : sampleInterval() · ИЗ2
+    B --> Sim : 8
+    Sim -> Cal : scheduleArrival(16, 2)
+    Sim -> Place : place(B3, 8)
+    Place -> Buf : findFirstFree() · Д1ОЗ3
+    Buf --> Place : нет свободного места
+    Place -> Buf : findNewest() · Д1ОО4, максимум номера постановки
+    Buf --> Place : ячейка 2 (#6 > #5 и #3)
+    Place -> Buf : peek(2)
+    Buf --> Place : A4 от И₁
+    Place -> Q : markDropped(8)
+    Place -> Stats : recordDrop(A4, 8, 2)
+Stats -> Q : sourceId()
+Q --> Stats : И₁
+note over Stats : Отказ учтён у датчика И₁.
+    Place -> Buf : take(2)
+    Buf --> Place : A4
+    Place -> Buf : put(2, B3, 8)
+    Place -> Stats : recordQueued(B3, 8, 2)
+    Sim -> Sel : dispatch(8)
+    note over Sel, Buf : Оба узла заняты. УП = 2, УБ = 3.
 
-note over Sim,Stats
-  Пример из трассы в docs/scenarios.md: при now = 4 заявка F выбивает E.
-  При now = 5 завершается B, заявка D запускается на П2.
-  При now = 8 то же событие завершения для D обновляет статистику и освобождает П2.
-end note
+    == t = 9 · завершение и новый запуск ==
+    Sim -> Cal : popNext()
+    Cal --> Sim : COMPLETION(9, П₁)
+    Sim -> P1 : complete(9)
+    P1 --> Sim : B2
+    Sim -> Stats : recordCompletion(B2, 9, 1)
+    Sim -> P1 : release()
+    Sim -> Sel : dispatch(9)
+    loop Повторять подбор до первого отсутствия пары
+      Sel -> Sel : findFreeDevice() · Д2П2, от УП = 2
+      Sel -> P2 : isFree()
+      P2 --> Sel : нет
+      Sel -> P1 : isFree()
+      P1 --> Sel : да при первом обходе, затем нет
+      Sel --> Sel : П₁ при первом обходе, затем нет
+      opt Свободный П₁ найден
+        Sel -> Buf : findOccupied(3) · Д2Б3, от УБ = 3
+        Buf --> Sel : ячейка 3, A3
+        Sel -> Buf : take(3)
+        Buf --> Sel : A3
+        Sel -> P1 : start(A3, 9) · ПЗ1
+        P1 --> Sel : завершение в 14
+        Sel -> Sel : advancePointers(1, 3) · УП = 2, УБ = 1
+        Sel -> Cal : scheduleCompletion(14, 1)
+        Sel -> Stats : recordStart(A3, 9, 3, 1)
+      end
+      note over Sel, Buf : На следующем обходе оба прибора заняты, выход.
+    end
+
+    == t = 12…18 · опустошение СМО ==
+    ref over Sim, Stats : t = 12 и 14 · завершаются B1 и A3.\nЗапускаются A2 на П₂ до 18 и B3 на П₁ до 16.
+    Sim -> Cal : popNext()
+    Cal --> Sim : ARRIVAL(15, И₁)
+    Sim -> A : generate(15) · последняя генерация по лимиту
+    A --> Sim : A5
+    Sim -> Stats : recordGenerated(A5, 15)
+    Sim -> Cal : discardArrivals()
+    Sim -> Place : place(A5, 15)
+    Place -> Buf : findFirstFree() · Д1ОЗ3
+    Buf --> Place : 1
+    Place -> Buf : put(1, A5, 15)
+    Place -> Stats : recordQueued(A5, 15, 1)
+    Sim -> Sel : dispatch(15)
+    note over Sel, Buf : Оба прибора заняты. Буфер [A5#8, ∅, ∅].
+    Sim -> Cal : popNext()
+    Cal --> Sim : COMPLETION(16, П₁)
+    Sim -> P1 : complete(16)
+    P1 --> Sim : B3
+    Sim -> Stats : recordCompletion(B3, 16, 1)
+    Sim -> P1 : release()
+    Sim -> Sel : dispatch(16)
+    Sel -> Sel : findFreeDevice() · Д2П2, П₂ занят
+Sel --> Sel : выбран П₁
+    Sel -> Buf : findOccupied(3) · Д2Б3
+    note right of Buf : Ячейка 3 пуста, переход к 1.
+    Buf --> Sel : ячейка 1
+    Sel -> Buf : take(1)
+    Buf --> Sel : A5
+    Sel -> P1 : start(A5, 16) · ПЗ1
+    P1 --> Sel : завершение в 17
+    Sel -> Sel : advancePointers(1, 1) · УП = 2, УБ = 2
+    Sel -> Cal : scheduleCompletion(17, 1)
+    Sel -> Stats : recordStart(A5, 16, 1, 1)
+    ref over Sim, Stats : t = 17, 18 · завершаются A5 и A2.\nБуфер пуст, приборы свободны, календарь пуст.\nБаланс: 8 генераций = 7 завершений + 1 отказ.
 @enduml

@@ -1,268 +1,171 @@
 @startuml
-title Вариант №26 · Диаграмма классов СМО
-!pragma layout smetana
-top to bottom direction
-skinparam defaultFontName Helvetica
-skinparam titleFontSize 22
-skinparam defaultFontSize 15
+title Вариант №26 · Диаграмма классов
+skinparam defaultFontName DejaVu Sans
+skinparam defaultFontSize 13
+skinparam defaultFontColor #142638
 skinparam shadowing false
-skinparam ArrowColor #31526A
 skinparam classAttributeIconSize 0
-skinparam nodesep 31
-skinparam ranksep 47
-skinparam packageStyle rectangle
-skinparam class {
-  BackgroundColor #EDF4F8
-  BorderColor #58748A
-  HeaderBackgroundColor #DBEAF3
-}
-skinparam package {
-  BackgroundColor #FAFCFD
-  BorderColor #91A9B9
-}
-hide circle
-hide empty methods
+skinparam ArrowColor #526D82
+skinparam classBackgroundColor #F1F6FA
+skinparam classBorderColor #526D82
+skinparam packageBackgroundColor #FFFFFF
+skinparam packageBorderColor #B0C2D0
+hide empty members
+top to bottom direction
 
-package "Событийное управление" {
+package "Управление моделью" {
   class Simulator {
-    - now: Real
-    - generationLimit: Int
-    - generatedTotal: Int
     - sources: List<Source>
     - devices: List<Device>
     - buffer: Buffer
     - placement: PlacementDispatcher
     - selection: SelectionDispatcher
     - calendar: EventCalendar
-    - statistics: StatisticsCollector
-    + initialize(limit: Int): void
+    - stats: StatisticsCollector
+    - now: Time
+    - remaining: int
+    + initialize(config: TrialConfig): void
     + step(): StepSnapshot?
-    + runAuto(): ReportSnapshot
-    - handle(event: Event): List<String>
-    - makeSnapshot(event: Event, transitions: List<String>): StepSnapshot
+    + snapshot(): StepSnapshot
+    + run(): RunReport
   }
 
   class EventCalendar {
-    - pending: PriorityQueue<Event>
-    - nextSerial: Long
-    + schedule(event: Event): void
+    - events: Heap<Event>
+    - nextSerial: int
+    + scheduleArrival(at: Time, sourceId: int): void
+    + scheduleCompletion(at: Time, deviceId: int): void
     + popNext(): Event?
-    + cancelGenerations(): void
+    + discardArrivals(): void
     + snapshot(): List<Event>
   }
 
   class Event {
+    - at: Time
     - kind: EventKind
-    - time: Real
-    - participantId: Int
-    - serial: Long
-    - request: Request?
-    + generation(sourceId: Int, at: Real): Event {static}
-    + serviceFinished(deviceId: Int, r: Request, at: Real): Event {static}
-    + assignSerial(serial: Long): void
-    + orderKey(): (Real, Int, Int, Long)
+    - originId: int
+    - serial: int
+    + Event(at: Time, kind: EventKind, originId: int, serial: int)
+    + time(): Time
     + kind(): EventKind
-    + time(): Real
-    + participantId(): Int
-    + request(): Request?
-  }
-
-  enum EventKind {
-    SERVICE_FINISHED
-    GENERATION
+    + originId(): int
+    + sortKey(): EventKey
   }
 }
 
-package "Участники СМО" {
-  class Source <<ИБ · ИЗ2>> {
-    - id: Int
-    - a: Real
-    - b: Real
-    - requestCounter: Long
-    + id(): Int
-    + generate(now: Real): Request
-    + sampleInterval(): Real
-  }
-
-  class PlacementDispatcher <<Д1ОЗ3 · Д1ОО4>> {
+package "Приём и распределение" {
+  class PlacementDispatcher {
     - buffer: Buffer
-    - statistics: StatisticsCollector
-    + place(r: Request, now: Real): PlacementResult
+    - stats: StatisticsCollector
+    + place(q: Request, now: Time): void
   }
 
-  class SelectionDispatcher <<Д2П2>> {
+  class SelectionDispatcher {
     - buffer: Buffer
     - devices: List<Device>
-    - devicePointer: Int
     - calendar: EventCalendar
-    - statistics: StatisticsCollector
-    + tryDispatch(now: Real): DispatchResult?
-    + devicePointer(): Int
-    - findFreeDevice(): Device?
+    - stats: StatisticsCollector
+    - nextDevice: int
+    - nextSlot: int
+    + dispatch(now: Time): void
+    + devicePointer(): int
+    + bufferPointer(): int
+    - findFreeDevice(): int?
+    - advancePointers(p: int, j: int): void
   }
 
-  class Buffer <<Д2Б3>> {
+  class Buffer {
     - slots: Array<Request?>
-    - capacity: Int
-    - bufferPointer: Int
-    - placementSerial: Long
-    + findFirstFree(): Int?
-    + findNewest(): Int?
-    + put(r: Request, j: Int, now: Real): void
-    + evict(j: Int): Request
-    + findNextOccupied(): Int?
-    + take(j: Int): Request
-    + bufferPointer(): Int
-    + snapshotSlots(): Array<Request?>
+    - placementOrder: int
+    + findFirstFree(): int?
+    + findNewest(): int?
+    + findOccupied(fromSlot: int): int?
+    + peek(j: int): Request
+    + put(j: int, q: Request, now: Time): void
+    + take(j: int): Request
+    + snapshot(): List<SlotState>
   }
+}
 
-  class Device <<ПЗ1>> {
-    - id: Int
-    - mu: Real
-    - active: Request?
-    - finishAt: Real?
-    + id(): Int
-    + isFree(): Bool
-    + start(r: Request, now: Real): Real
-    + finish(now: Real): Request
-    + activeRequest(): Request?
-    + finishAt(): Real?
-    - sampleServiceTime(): Real
+package "Датчики и вычислительные узлы" {
+  class Source {
+    - id: int
+    - lastNumber: int
+    - kind: MeasurementKind
+    - a: Time
+    - b: Time
+    - rng: Random
+    + generate(now: Time): Request
+    + sampleInterval(): Time
+    + snapshot(): SourceState
   }
 
   class Request {
-    - id: RequestId
-    - sourceId: Int
-    - action: String
-    - generatedAt: Real
-    - bufferedAt: Real?
-    - placementSerial: Long?
-    - startedAt: Real?
-    - finishedAt: Real?
-    - refusedAt: Real?
-    + id(): RequestId
-    + sourceId(): Int
-    + placementSerial(): Long?
-    + bufferedAt(): Real?
-    + markBuffered(now: Real, serial: Long): void
-    + markRefused(now: Real): void
-    + markStarted(now: Real): void
-    + markFinished(now: Real): void
-    + waitingTime(): Real?
-    + serviceTime(): Real?
+    - sourceId: int
+    - number: int
+    - kind: MeasurementKind
+    - value: real
+    - generatedAt: Time
+    - queuedAt: Time?
+    - placementOrder: int?
+    - startAt: Time?
+    - endedAt: Time?
+    - outcome: Outcome?
+    + Request(sourceId: int, number: int, kind: MeasurementKind, value: real, now: Time)
+    + sourceId(): int
+    + placementOrder(): int?
+    + markQueued(now: Time, order: int): void
+    + markDropped(now: Time): void
+    + markStarted(now: Time): void
+    + markCompleted(now: Time): void
+    + snapshot(): RequestState
+  }
+
+  class Device {
+    - id: int
+    - rate: real
+    - rng: Random
+    - current: Request?
+    - dueAt: Time?
+    + isFree(): bool
+    + start(q: Request, now: Time): Time
+    + complete(now: Time): Request
+    + release(): void
+    + snapshot(): DeviceState
+    - sampleDuration(): Time
   }
 }
 
-package "Показатели и представления" {
-  class StatisticsCollector {
-    - generated: Map<Int, Long>
-    - refused: Map<Int, Long>
-    - served: Map<Int, Long>
-    - waitingSums: Map<Int, (Real, Real)>
-    - serviceSums: Map<Int, (Real, Real)>
-    - busyTotals: Map<Int, Real>
-    - activeStarts: Map<Int, Real>
-    + registerGenerated(r: Request): void
-    + registerRefused(victim: Request, now: Real): void
-    + registerStart(r: Request, deviceId: Int, now: Real): void
-    + registerServed(done: Request, deviceId: Int): void
-    + snapshot(now: Real): ReportSnapshot
-  }
-
-  class StepView <<ОД2>> {
-    - currentStep: StepSnapshot?
-    + show(step: StepSnapshot): void
-    - showScheme(step: StepSnapshot): void
-    - showCalendar(events: List<Event>): void
-  }
-
-  class AutoReportView <<ОР1>> {
-    - currentReport: ReportSnapshot?
-    + showSummary(report: ReportSnapshot): void
-  }
+class StatisticsCollector {
+  - bySource: Map<int, SourceTotals>
+  - byDevice: Map<int, DeviceTotals>
+  - journal: List<Transition>
+  + recordGenerated(q: Request, now: Time): void
+  + recordQueued(q: Request, now: Time, j: int): void
+  + recordDrop(q: Request, now: Time, j: int): void
+  + recordStart(q: Request, now: Time, j: int, p: int): void
+  + recordCompletion(q: Request, now: Time, p: int): void
+  + journalSize(): int
+  + transitions(range: IndexRange): List<Transition>
+  + report(now: Time, devices: List<DeviceState>): RunReport
 }
 
-package "Результаты операций и снимки" {
-  class PlacementResult <<значение>> {
-    - slot: Int
-    - victim: Request?
-    + slot(): Int
-    + victim(): Request?
-  }
-
-  class DispatchResult <<значение>> {
-    - slot: Int
-    - request: Request
-    - deviceId: Int
-    - finishAt: Real
-    + slot(): Int
-    + request(): Request
-    + deviceId(): Int
-    + finishAt(): Real
-  }
-
-  class StepSnapshot <<значение>> {
-    - now: Real
-    - lastEvent: Event
-    - transitions: List<String>
-    - pending: List<Event>
-    - sources: List<(Int, Real?)>
-    - slots: Array<(RequestId, Real, Long)?>
-    - devices: List<(Int, RequestId?, Real?)>
-    - bufferPointer: Int
-    - devicePointer: Int
-    - report: ReportSnapshot
-    + state(): SystemState
-    + pending(): List<Event>
-    + report(): ReportSnapshot
-  }
-
-  class ReportSnapshot <<значение>> {
-    - sources: Table
-    - devices: Table
-    + sourceTable(): Table
-    + deviceTable(): Table
-  }
-}
-
-Simulator *-- "1..*" Source : источники
-Simulator *-- "1..*" Device : приборы
-Simulator *-- Buffer
-Simulator *-- PlacementDispatcher
-Simulator *-- SelectionDispatcher
-Simulator *-- EventCalendar
-Simulator *-- StatisticsCollector
-Source ..> Request : создаёт
-EventCalendar *-- "0..*" Event : ожидают
-Event --> EventKind
-Event --> "0..1" Request : завершение
-PlacementDispatcher --> Buffer : запись и отказ
-PlacementDispatcher --> StatisticsCollector : отказ
-PlacementDispatcher ..> PlacementResult : результат
-SelectionDispatcher --> Buffer : кольцевая выборка
-SelectionDispatcher --> Device : поиск и старт
-SelectionDispatcher --> EventCalendar : завершение
-SelectionDispatcher --> StatisticsCollector : старт
-SelectionDispatcher ..> DispatchResult : результат
-Buffer --> "0..N" Request : ожидают
-Device --> "0..1" Request : обслуживает
-StatisticsCollector ..> Request : метки и источник
-StatisticsCollector ..> ReportSnapshot : показатели
-Simulator ..> StepSnapshot : снимок шага
-StepView --> StepSnapshot : отображает
-AutoReportView --> ReportSnapshot : отображает
-StepSnapshot --> ReportSnapshot : показатели шага
-
-legend bottom
-  ИЗ2 · τ = a + (b − a) × U, U ∈ [0, 1), 0 < a < b.
-  ПЗ1 · t = −ln(U) / μ, U ∈ (0, 1), μ > 0.
-  Buffer.findFirstFree начинает с ячейки 1, Buffer.findNextOccupied — с УБ.
-  Buffer.take обновляет УБ ← 1 + (j mod N).
-  SelectionDispatcher при успешном старте обновляет УП ← 1 + (p mod M).
-  ? — возможное отсутствие значения.
-  RequestId — пара «источник, номер заявки у источника».
-  SystemState — значения времени, события, переходов, источников, ячеек, приборов и указателей из снимка.
-  Table — строки показателей ОР1 по источникам или приборам.
-  Снимок хранит ID и метки времени по значению.
-endlegend
+Simulator "1" *-- "1" EventCalendar
+EventCalendar "1" *-right- "0..*" Event
+Simulator "1" *-- "1" PlacementDispatcher
+Simulator "1" *-- "1" SelectionDispatcher
+Simulator "1" *-- "1" Buffer
+Simulator "1" *-- "1..*" Source
+Simulator "1" *-- "1..*" Device
+Simulator "1" *-- "1" StatisticsCollector
+PlacementDispatcher "1" --> "1" Buffer
+SelectionDispatcher "1" --> "1" Buffer
+SelectionDispatcher "1" --> "1..*" Device
+SelectionDispatcher "1" --> "1" EventCalendar
+PlacementDispatcher "1" --> "1" StatisticsCollector
+SelectionDispatcher "1" --> "1" StatisticsCollector
+Source "1" -- "0..*" Request : датчик по sourceId
+Buffer "0..1" --> "0..B" Request : ожидают
+Device "0..1" --> "0..1" Request : обслуживается
+StatisticsCollector ..> Request : принимает в методы
 @enduml

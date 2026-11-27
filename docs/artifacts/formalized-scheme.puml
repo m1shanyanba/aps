@@ -1,44 +1,48 @@
-@startuml
-!pragma layout smetana
-title Вариант №26 · Формализованная схема СМО · ОД2
-skinparam defaultFontName Helvetica
-skinparam titleFontSize 22
-skinparam defaultFontSize 16
-skinparam shadowing false
-skinparam ArrowColor #31526A
-skinparam rectangle {
-  BackgroundColor #EAF3F8
-  BorderColor #58748A
-  RoundCorner 10
+@startdot
+digraph Telemetry {
+  graph [labelloc=t, label="Вариант №26 · Формализованная схема ОД2", fontname="DejaVu Sans Bold",
+         splines=polyline, fontsize=16, fontcolor="#142638", bgcolor=white, pad=0.22, nodesep=0.55, ranksep=0.42]
+  node [shape=box, style="rounded,filled", fillcolor="#F1F6FA", color="#526D82",
+        fontname="DejaVu Sans", fontsize=12, fontcolor="#142638", margin="0.14,0.10"]
+  edge [color="#526D82", fontcolor="#142638", fontname="DejaVu Sans", fontsize=10, arrowsize=0.7]
+
+  src [label="Датчики И₁ … Иₙ\nИБ · ИЗ2\nТип измерения и время следующего прихода", group=main]
+  place [label="Приёмщик телеметрии\nД1ОЗ3 · первая свободная ячейка от начала", group=main]
+  buffer [shape=plain, group=main, label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#526D82" BGCOLOR="#F1F6FA">
+      <TR><TD COLSPAN="4"><B>Общий буфер</B></TD></TR>
+      <TR><TD>1</TD><TD>2</TD><TD>…</TD><TD>B</TD></TR>
+      <TR><TD COLSPAN="4">В каждой ячейке — пусто или сообщение<BR/>с номером постановки</TD></TR>
+    </TABLE>>]
+  select [shape=plain, group=main, label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6" COLOR="#526D82" BGCOLOR="#F1F6FA">
+      <TR><TD PORT="head" COLSPAN="2"><B>Планировщик обработки</B></TD></TR>
+      <TR><TD BGCOLOR="#FFF5D9">УП ∈ 1…M</TD><TD ALIGN="LEFT">Д2П2 · поиск свободного узла</TD></TR>
+      <TR><TD BGCOLOR="#FFF5D9">УБ ∈ 1…B</TD><TD ALIGN="LEFT">Д2Б3 · поиск занятой ячейки</TD></TR>
+    </TABLE>>]
+  dev [label="Вычислительные узлы П₁ … Пₘ\nПЗ1 · свободен или занят\nТекущее сообщение и время окончания", group=main]
+  saved [label="Сохранённые измерения", fillcolor="#ECF6EC", group=main]
+  dropped [label="Потерянные измерения\nД1ОО4 · выбивается последняя\nпоставленная заявка", fillcolor="#FBEFEB", group=outcomes]
+  stats [label="Статистика\nЖурнал переходов и доля отказов\nНакопленные показатели", group=outcomes]
+  cal [label="Управление моделью\nМодельное время и календарь\nгенераций и завершений", group=control]
+  legend [label="Сплошная стрелка — путь сообщения.\nПунктир — управление и передача данных для учёта.", fillcolor="#FFFFFF", color="#B0C2D0", group=main]
+
+  {rank=same; cal; place}
+  {rank=same; buffer; dropped}
+  {rank=same; dev; stats}
+
+  src -> place [label=" измерение", weight=10]
+  place -> buffer [label=" постановка", weight=10]
+  buffer -> select [label=" ожидающее сообщение", weight=10]
+  select -> dev [label=" передача на обработку", weight=10]
+  dev -> saved [label=" завершение", weight=10]
+  saved -> legend [style=invis, weight=10]
+  buffer -> dropped [label=" выбивание"]
+
+  cal -> place [style=invis, weight=20]
+  src:w -> cal:n [dir=back, style=dashed, label=" генерация"]
+  cal:s -> select:head:w [style=dashed, minlen=2, label=" запуск после постановки\n или освобождения"]
+  dropped:s -> stats:n [style=dashed, label=" отказ у датчика\n выбитого сообщения", weight=10]
+  dev:e -> stats:w [style=dashed, label=" обработка и занятость"]
 }
-skinparam NoteBackgroundColor #FFF7DF
-skinparam NoteBorderColor #C7AA62
-
-rectangle "Источники И₁ … Иₖ · K клиентов\nИБ · ИЗ2\nСнимок: следующая генерация, счётчики" as Src
-rectangle "Диспетчер постановки\nД1ОЗ3 · поиск с ячейки 1" as Placement
-rectangle "Общий буфер · N ячеек\n1 · 2 · … · N\nСнимок: заявки и номера постановки\nУБ ∈ 1…N · начало выборки" as Buffer
-rectangle "Диспетчер выбора\nД2Б3 · от УБ, Д2П2 · от УП\nСнимок: УП ∈ 1…M" as Selection
-rectangle "Приборы П₁ … Пₘ · M обработчиков\nПЗ1\nСнимок: занятость, заявка, время завершения" as Devices
-rectangle "Выход\nОбработанные действия" as Done #EDF6EC
-rectangle "Выход с отказом\nД1ОО4 · выбитое действие" as Rejected #FBEDEB
-
-Src -down-> Placement : новое действие
-Placement -down-> Buffer : запись в ячейку
-Buffer -down-> Selection : извлечение заявки
-Selection -down-> Devices : назначение
-Devices -down-> Done : результат
-Buffer -right-> Rejected : переполнение
-Devices -[#486F88,dashed]up-> Selection
-
-note right of Placement
-  Состояние шага
-  Модельное время, последнее событие,
-  календарь предстоящих событий,
-  доля отказов и текущие показатели.
-end note
-note right of Devices
-  Сплошные стрелки показывают движение заявки.
-  Пунктир показывает триггер освобождения.
-  Запись заявки в буфер даёт второй триггер.
-end note
-@enduml
+@enddot

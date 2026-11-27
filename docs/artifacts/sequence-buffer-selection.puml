@@ -1,0 +1,51 @@
+@startuml
+title Вариант №26 · Кольцевой выбор ожидающего сообщения
+skinparam defaultFontName DejaVu Sans
+skinparam defaultFontSize 13
+skinparam defaultFontColor #142638
+skinparam shadowing false
+skinparam ArrowColor #38566D
+skinparam sequenceLifeLineBorderColor #97ABBA
+skinparam sequenceParticipantBackgroundColor #F1F6FA
+skinparam sequenceParticipantBorderColor #526D82
+skinparam sequenceGroupBorderColor #8095A5
+skinparam sequenceGroupBackgroundColor #EDF3F7
+skinparam noteBackgroundColor #FFF5D9
+skinparam noteBorderColor #B09354
+hide footbox
+
+control "Управление\nмоделью" as Sim
+control "Планировщик" as Sel
+participant "Общий\nбуфер" as Buf
+participant "Узел П₁" as P1
+queue "Календарь\nсобытий" as Cal
+participant "Статистика" as Stats
+
+note over Sel, Buf
+  Состояние на t = 16 после освобождения П₁.
+  УБ = 3, УП = 2. Буфер [A5#8, ∅, ∅].
+  П₂ занят, П₁ свободен.
+end note
+Sim -> Sel : dispatch(16)
+Sel -> Sel : findFreeDevice() · Д2П2, от УП
+Sel -> P1 : isFree()
+P1 --> Sel : да
+Sel --> Sel : П₁, после пропуска П₂
+Sel -> Buf : findOccupied(3) · Д2Б3, от УБ
+loop До первой занятой ячейки, не более 3 проверок
+  alt Текущая ячейка пуста
+    note right of Buf : Ячейка 3 пуста, переход к 1
+  else Текущая ячейка занята
+    note right of Buf : В ячейке 1 находится A5
+  end
+end
+Buf --> Sel : ячейка 1
+Sel -> Buf : take(1)
+Buf --> Sel : A5
+Sel -> P1 : start(A5, 16) · ПЗ1
+P1 --> Sel : 17
+Sel -> Sel : advancePointers(1, 1) · УП = 2, УБ = 2
+Sel -> Cal : scheduleCompletion(17, 1)
+Sel -> Stats : recordStart(A5, 16, 1, 1)
+note over Sel, Buf : Буфер пуст, активация завершится.
+@enduml

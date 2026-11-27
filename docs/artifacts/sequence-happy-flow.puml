@@ -1,89 +1,76 @@
 @startuml
-title Вариант №26 · Успешный сценарий\nСвободная ячейка и свободный обработчик
-skinparam defaultFontName Helvetica
-skinparam titleFontSize 22
-skinparam defaultFontSize 15
+title Вариант №26 · Успешный приём и обработка
+skinparam defaultFontName DejaVu Sans
+skinparam defaultFontSize 13
+skinparam defaultFontColor #142638
 skinparam shadowing false
-skinparam backgroundColor #FFFFFF
-skinparam ArrowColor #31526A
-skinparam sequence {
-  ParticipantBackgroundColor #EAF3F8
-  ParticipantBorderColor #58748A
-  LifeLineBorderColor #A2B3BF
-  GroupBorderColor #708798
-}
-skinparam NoteBackgroundColor #FFF7DF
-skinparam NoteBorderColor #C7AA62
+skinparam ArrowColor #38566D
+skinparam sequenceLifeLineBorderColor #97ABBA
+skinparam sequenceParticipantBackgroundColor #F1F6FA
+skinparam sequenceParticipantBorderColor #526D82
+skinparam sequenceGroupBorderColor #8095A5
+skinparam sequenceGroupBackgroundColor #EDF3F7
+skinparam noteBackgroundColor #FFF5D9
+skinparam noteBorderColor #B09354
 hide footbox
-autonumber
 
-control "Симулятор" as Sim
-queue "Календарь" as Cal
-participant "Игровой клиент\nИсточник s" as Src
-control "Диспетчер\nпостановки" as Place
-participant "Общий буфер\nN ячеек · УБ" as Buf
-control "Диспетчер\nвыбора · УП" as Select
-participant "Прибор p" as Dev
+control "Управление\nмоделью" as Sim
+queue "Календарь\nсобытий" as Cal
+participant "Датчик Иᵢ" as Src
+control "Приёмщик\nтелеметрии" as Place
+control "Планировщик" as Sel
+participant "Общий\nбуфер" as Buf
+participant "Вычислительный\nузел Пⱼ" as Dev
 participant "Статистика" as Stats
 
-== Генерация и постановка ==
-note over Sim,Dev
-  В начале сценария буфер пуст. Есть свободный прибор.
-  Показанная генерация запланирована по ИЗ2.
-  Обслуживание в этом сценарии завершается до следующего поступления.
+== Генерация в момент t ==
+note over Sim, Cal : Завершение в этом примере наступает\nраньше следующей генерации.
+Sim -> Cal : popNext()
+Cal --> Sim : ARRIVAL(t, Иᵢ)
+Sim -> Src : generate(t) · ИБ, независимый поток
+Src --> Sim : сообщение q
+Sim -> Stats : recordGenerated(q, t)
+Sim -> Src : sampleInterval() · ИЗ2, равномерный интервал
+Src --> Sim : τ
+Sim -> Cal : scheduleArrival(t + τ, i)
+Sim -> Place : place(q, t)
+Place -> Buf : findFirstFree() · Д1ОЗ3, от ячейки 1
+Buf --> Place : ячейка 1
+Place -> Buf : put(1, q, t)
+Place -> Stats : recordQueued(q, t, 1)
+
+== Передача в тот же момент t ==
+Sim -> Sel : dispatch(t) · после постановки
+Sel -> Sel : findFreeDevice() · Д2П2, обход от УП = 1
+Sel -> Dev : isFree()
+Dev --> Sel : да, П₁
+Sel --> Sel : выбран П₁
+Sel -> Buf : findOccupied(1) · Д2Б3, обход от УБ = 1
+Buf --> Sel : ячейка 1
+Sel -> Buf : take(1)
+Buf --> Sel : q, ячейка освобождена
+Sel -> Dev : start(q, t)
+Dev -> Dev : sampleDuration() · ПЗ1, экспоненциальная длительность
+Dev --> Dev : s
+Dev --> Sel : t + s
+Sel -> Sel : advancePointers(1, 1) · позиции после П₁ и ячейки 1
+Sel -> Cal : scheduleCompletion(t + s, 1)
+Sel -> Stats : recordStart(q, t, 1, 1)
+note over Sel, Buf
+  Других ожидающих сообщений нет.
+  Активация планировщика завершается.
 end note
-Sim -> Cal : popNext()
-Cal --> Sim : GENERATION(s, now)
-Sim -> Src : generate(now) · ИБ
-Src --> Sim : заявка r
-Sim -> Stats : registerGenerated(r)
-alt Лимит генераций ещё не исчерпан
-  Sim -> Src : sampleInterval() · ИЗ2, равномерный интервал
-  Src --> Sim : τ = a + (b − a) × U, U ∈ [0, 1), 0 < a < b
-  Sim -> Cal : schedule(GENERATION(s, now + τ))
-else Достигнут лимит генераций
-  Sim -> Cal : cancelGenerations()
-end
-Sim -> Place : place(r, now)
-Place -> Buf : findFirstFree() · Д1ОЗ3, просмотр с ячейки 1
-Buf --> Place : первая свободная ячейка j
-Place -> Buf : put(r, j, now) · присвоить номер постановки
-Place --> Sim : постановка успешна, позиция j
 
-== Назначение на обслуживание ==
-Sim -> Select : tryDispatch(now) · триггер «заявка в буфере»
-Select -> Select : findFreeDevice() · Д2П2, кольцо от УП
-Select -> Dev : isFree()
-Dev --> Select : true
-Select --> Select : свободный прибор p
-Select -> Buf : findNextOccupied() · Д2Б3, кольцо от УБ
-Buf --> Select : занятая ячейка j
-Select -> Buf : take(j)
-Buf -> Buf : извлечь r, УБ ← 1 + (j mod N)
-Buf --> Select : r, ячейка освобождена
-Select -> Dev : start(r, now)
-Dev -> Dev : sampleServiceTime() · ПЗ1
-Dev --> Dev : t = −ln(U) / μ, U ∈ (0, 1), μ > 0
-Dev -> Dev : отметить старт, занять прибор
-Dev --> Select : finishAt = now + t
-Select -> Select : УП ← 1 + (p mod M)
-Select -> Stats : registerStart(r, p, now)
-Select -> Cal : schedule(SERVICE_FINISHED(p, r, finishAt))
-Select --> Sim : r принята прибором p
-
-== Завершение и освобождение ==
-... Календарь выдаёт событие завершения ...
+== Завершение в момент t + s ==
 Sim -> Cal : popNext()
-Cal --> Sim : SERVICE_FINISHED(p, r, finishAt)
-Sim -> Dev : finish(finishAt)
-Dev -> Dev : отметить выход r, освободить прибор
-Dev --> Sim : завершённая r
-Sim -> Stats : registerServed(r, p)
-Sim -> Select : tryDispatch(finishAt) · триггер «прибор свободен»
-ref over Select, Dev
-  Д2П2 · поиск по кольцу находит свободный прибор
-end ref
-Select -> Buf : findNextOccupied() · Д2Б3
-Buf --> Select : нет заявки
-Select --> Sim : назначения нет, УБ и УП сохраняются
+Cal --> Sim : COMPLETION(t + s, П₁)
+Sim -> Dev : complete(t + s)
+Dev --> Sim : q сохранено
+Sim -> Stats : recordCompletion(q, t + s, 1)
+Sim -> Dev : release()
+Sim -> Sel : dispatch(t + s) · после освобождения
+note over Sel, Buf
+  Свободный прибор есть, буфер пуст.
+  УП и УБ остаются на прежних местах.
+end note
 @enduml

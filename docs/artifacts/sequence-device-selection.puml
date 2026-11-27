@@ -1,0 +1,53 @@
+@startuml
+title Вариант №26 · Кольцевой выбор свободного прибора
+skinparam defaultFontName DejaVu Sans
+skinparam defaultFontSize 13
+skinparam defaultFontColor #142638
+skinparam shadowing false
+skinparam ArrowColor #38566D
+skinparam sequenceLifeLineBorderColor #97ABBA
+skinparam sequenceParticipantBackgroundColor #F1F6FA
+skinparam sequenceParticipantBorderColor #526D82
+skinparam sequenceGroupBorderColor #8095A5
+skinparam sequenceGroupBackgroundColor #EDF3F7
+skinparam noteBackgroundColor #FFF5D9
+skinparam noteBorderColor #B09354
+hide footbox
+
+control "Управление\nмоделью" as Sim
+control "Планировщик" as Sel
+participant "Узел П₂" as P2
+participant "Узел П₁" as P1
+participant "Общий\nбуфер" as Buf
+queue "Календарь\nсобытий" as Cal
+participant "Статистика" as Stats
+
+note over Sel, Buf
+  Состояние на t = 9 после освобождения П₁.
+  УП = 2, УБ = 3. Буфер [A2#3, B3#7, A3#5].
+end note
+Sim -> Sel : dispatch(9)
+Sel -> Sel : findFreeDevice() · Д2П2, от УП
+loop До первого свободного прибора, не более 2 проверок
+  alt Первая проверка
+    Sel -> P2 : isFree()
+    P2 --> Sel : нет
+    note over Sel, P2 : Переход с последнего прибора на первый
+  else Вторая проверка
+    Sel -> P1 : isFree()
+    P1 --> Sel : да
+    note over Sel, P1 : Поиск заканчивается на П₁
+  end
+end
+Sel --> Sel : выбран П₁
+Sel -> Buf : findOccupied(3) · Д2Б3
+Buf --> Sel : ячейка 3
+Sel -> Buf : take(3)
+Buf --> Sel : A3
+Sel -> P1 : start(A3, 9) · ПЗ1
+P1 --> Sel : 14
+Sel -> Sel : advancePointers(1, 3) · УП = 2, УБ = 1
+Sel -> Cal : scheduleCompletion(14, 1)
+Sel -> Stats : recordStart(A3, 9, 3, 1)
+note over Sel, P1 : Оба прибора заняты, дальнейшей передачи нет.
+@enduml
